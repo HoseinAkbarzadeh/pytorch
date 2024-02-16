@@ -199,10 +199,11 @@ else:
         ) -> None:
             self.device_type = device_type
             self.mesh = (
-                mesh.detach().cpu()
+                mesh.detach()
                 if isinstance(mesh, torch.Tensor)
                 else torch.tensor(mesh, dtype=torch.int)
             )
+            assert mesh.device.type == "cpu", f"`mesh` must be a CPU tensor, got {mesh}"
             self.mesh_dim_names = mesh_dim_names
 
             # private field to pre-generate DeviceMesh's hash
