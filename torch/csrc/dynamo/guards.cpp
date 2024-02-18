@@ -872,6 +872,37 @@ class EQUALS_MATCH : public LeafGuard {
   PyTypeObject* _value_type;
 };
 
+class DEFAULT_DEVICE : public LeafGuard {
+ public:
+  DEFAULT_DEVICE(py::object verbose_code_parts)
+      : LeafGuard(verbose_code_parts) {
+    py::handle device_module = py::module::import("torch.utils._device");
+    // Save the dict using py::object
+    _utils_device_dict = device_module.attr("__dict__");
+    _device = PyDict_GetItemString(
+        _utils_device_dict.ptr(), "CURRENT_DEVICE"); // borrowed ref
+  }
+
+  bool check_nopybind(PyObject* value) override { // borrowed ref
+    PyObject* device = PyDict_GetItemString(
+        _utils_device_dict.ptr(), "CURRENT_DEVICE"); // borrowed ref
+    if (device != _device) {
+      int result = PyObject_RichCompareBool(device, _device, Py_EQ);
+      if (result == -1) {
+        PyErr_Clear();
+        return false;
+      }
+      return result;
+    }
+    return true;
+  }
+
+ private:
+  // Save the current device and the module dict during the guard construction.
+  py::object _utils_device_dict;
+  PyObject* _device;
+};
+
 /**
  * Relational guards compare more than one value. We implement Relational
  * guards by capturing some state in the guard object. For example for tensor
@@ -1477,6 +1508,10 @@ PyObject* torch_c_dynamo_guards_init() {
       py_m, "EQUALS_MATCH")
       .def(py::init<py::object, py::list>())
       .def("__call__", &EQUALS_MATCH::check);
+  py::class_<DEFAULT_DEVICE, LeafGuard, std::shared_ptr<DEFAULT_DEVICE>>(
+      py_m, "DEFAULT_DEVICE")
+      .def(py::init<py::list>())
+      .def("__call__", &DEFAULT_DEVICE::check);
 
   // Guard Accessors - These are present so that we can iterate over the
   // GuardManager hierarchy. We intentionally do not provide even an init
@@ -1540,6 +1575,12 @@ PyObject* torch_c_dynamo_guards_init() {
              py::object verbose_code_parts) -> void {
             self.add_leaf_guard(
                 std::make_shared<EQUALS_MATCH>(value, verbose_code_parts));
+          })
+      .def(
+          "add_default_device_guard",
+          [](GuardManager& self, py::object verbose_code_parts) -> void {
+            self.add_leaf_guard(
+                std::make_shared<DEFAULT_DEVICE>(verbose_code_parts));
           })
       // return by reference because C++ GuardManager has the ownership of
       // accessors and guard managers
