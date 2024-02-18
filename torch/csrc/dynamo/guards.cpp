@@ -438,6 +438,7 @@ static PyMethodDef TensorGuards_methods[] = {
 
 static PyTypeObject TensorGuardsType = {PyVarObject_HEAD_INIT(nullptr, 0)};
 
+// TODO (janimesh) - Remove this when C++ guard manager is merged.
 struct GlobalStateGuard {
   PyObject_HEAD;
 
@@ -901,6 +902,49 @@ class DEFAULT_DEVICE : public LeafGuard {
   // Save the current device and the module dict during the guard construction.
   py::object _utils_device_dict;
   PyObject* _device;
+};
+
+class GLOBAL_STATE : public LeafGuard {
+ public:
+  GLOBAL_STATE(py::object verbose_code_parts) : LeafGuard(verbose_code_parts) {
+    auto& ctx = at::globalContext();
+    _grad_mode = at::GradMode::is_enabled();
+    _torch_function = torch::torch_function_enabled();
+    _deterministic_algorithms = ctx.deterministicAlgorithms();
+    _deterministic_algorithms_warn_only = ctx.deterministicAlgorithmsWarnOnly();
+    _allow_tf32 = ctx.allowTF32CuBLAS();
+    _allow_fp16_reduce = ctx.allowFP16ReductionCuBLAS();
+    _allow_bf16_reduce = ctx.allowBF16ReductionCuBLAS();
+    _num_threads = at::get_num_threads();
+    _default_dtype = at::get_default_dtype();
+  }
+
+  bool check_nopybind(PyObject* value) override { // borrowed ref
+    // Ignore value arg, this is just to satisfy the interface.
+    auto& ctx = at::globalContext();
+    return (_grad_mode == at::GradMode::is_enabled() &&
+            _torch_function == torch::torch_function_enabled() &&
+            _deterministic_algorithms == ctx.deterministicAlgorithms() &&
+            _deterministic_algorithms_warn_only ==
+                ctx.deterministicAlgorithmsWarnOnly() &&
+            _allow_tf32 == ctx.allowTF32CuBLAS() &&
+            _allow_fp16_reduce == ctx.allowFP16ReductionCuBLAS() &&
+            _allow_bf16_reduce == ctx.allowBF16ReductionCuBLAS() &&
+            _num_threads == at::get_num_threads()) &&
+        _default_dtype == at::get_default_dtype();
+  }
+
+ private:
+  bool _grad_mode;
+  bool _torch_function;
+  bool _deterministic_algorithms;
+  bool _deterministic_algorithms_warn_only;
+  bool _allow_tf32;
+  bool _allow_fp16_reduce;
+  bool _allow_bf16_reduce;
+  int _num_threads;
+  caffe2::TypeMeta _default_dtype;
+  // TODO(jansel): we should guard on more state as inductor starts using it
 };
 
 /**
@@ -1512,6 +1556,10 @@ PyObject* torch_c_dynamo_guards_init() {
       py_m, "DEFAULT_DEVICE")
       .def(py::init<py::list>())
       .def("__call__", &DEFAULT_DEVICE::check);
+  py::class_<GLOBAL_STATE, LeafGuard, std::shared_ptr<GLOBAL_STATE>>(
+      py_m, "GLOBAL_STATE")
+      .def(py::init<py::list>())
+      .def("__call__", &GLOBAL_STATE::check);
 
   // Guard Accessors - These are present so that we can iterate over the
   // GuardManager hierarchy. We intentionally do not provide even an init
@@ -1581,6 +1629,12 @@ PyObject* torch_c_dynamo_guards_init() {
           [](GuardManager& self, py::object verbose_code_parts) -> void {
             self.add_leaf_guard(
                 std::make_shared<DEFAULT_DEVICE>(verbose_code_parts));
+          })
+      .def(
+          "add_global_state_guard",
+          [](GuardManager& self, py::object verbose_code_parts) -> void {
+            self.add_leaf_guard(
+                std::make_shared<GLOBAL_STATE>(verbose_code_parts));
           })
       // return by reference because C++ GuardManager has the ownership of
       // accessors and guard managers
